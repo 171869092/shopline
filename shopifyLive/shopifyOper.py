@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-import time,json
+import time,json,os
 import shopify
 from datetime import datetime, timedelta
 import random
@@ -27,6 +27,7 @@ class shopifyOper:
         # self.shop_url = "https://%s.myshopify.com/admin" % ( self.SHOP_NAME)
         self.cursor = object
         self.db = object
+        self.paths = ''
     def pullOrder(self):
         """
         pull shopify oreder
@@ -50,26 +51,35 @@ class shopifyOper:
                 shopify.ShopifyResource.set_site(shopUrl)
                 shopify.Shop.current()
                 nowT = self.tsTime()
-                strTime = self.formatTime(nowT)
+                strTime = self.formatTime(nowT, data['time_zore'])
                 endT = self.endTime()
-                endTime = self.formatTime(endT)
+                endTime = self.formatTime(endT, data['time_zore'])
                 # . 按时间匹配当日订单
-                # order = shopify.Order().find(None, None, created_at_min=strTime, created_at_max=endTime)
-                order = shopify.Order().find('2525433594015')
-                data = []
+                print(strTime)
+                print(endTime)
+                order = shopify.Order().find(None, None, created_at_min=strTime, created_at_max=endTime)
+                #order = shopify.Order().find('2525433594015')
+                datas = []
+                print(order)
                 if isinstance(order, list):
                     for orders in order:
-                        data.append(orders.to_dict())
+                        datas.append(orders.to_dict())
                 else:
-                    data.append(order.to_dict())
+                    datas.append(order.to_dict())
                 if order is None:
                     quit(0)
-                self.execOrderDatas(data)
-                # self.exportOrder(data)
+                dates = '/home/download/'+time.strftime("%Y-%m-%d")
+                exists = os.path.exists(dates)
+                if not exists:
+                    os.makedirs(dates)
+                self.paths = dates
+                self.execOrderDatas(datas,data['id'],data['name'])
+                self.exportOrder(datas,data['id'],data['name'])
+                return True
         except Exception as e:
             raise e
 
-    def execOrderDatas(self, data):
+    def execOrderDatas(self, data,storeId,storeName):
         """
         保存数据
         :return:
@@ -80,31 +90,34 @@ class shopifyOper:
         db = self.db
         orderFormat = {}
         #. order
-        self.insertOrder(data)
+        self.insertOrder(data,storeId,storeName)
         # #. order_item
-        # self.insertOrderItem(data)
+        self.insertOrderItem(data)
         # #. order_shipping
-        # self.insertOrderShipping(data)
+        self.insertOrderShipping(data)
         curros.close()
         db.close()
         return True
 
-    def checkOrder(self,order_id, table):
+    def checkOrder(self,order_id, table, sku = None):
         """
         check order
         :param data:
         :return:
         """
-        if not order_id:
-            return
+        #if not order_id:
+        #    return
         curros = self.cursor
         db = self.db
-        sql = "SELECT * FROM `%s` WHERE order_id = %s" %(table,order_id)
+        if not sku:
+            sql = "SELECT * FROM `%s` WHERE order_id = %s" % (table, order_id)
+        else:
+            sql = "SELECT * FROM `%s` WHERE sku = '%s'" % (table, sku)
         curros.execute(sql)
         results = curros.fetchone()
         return results
 
-    def insertOrder(self,data):
+    def insertOrder(self,data,storeId,storeName):
         """
         insert order tables
         :param data:
@@ -117,6 +130,8 @@ class shopifyOper:
         orderFormat = {}
         for i in data:
             orderFormat['order_id'] = i['id'];
+            orderFormat['store_id'] = storeId
+            orderFormat['store_name'] = storeName
             orderFormat['order_name'] = i['name']
             orderFormat['order_number'] = i['order_number']
             orderFormat['email'] = i['email']
@@ -133,9 +148,9 @@ class shopifyOper:
             if result:
                 continue
             # values = ', '.join("'{}'".format(k) for k in orderFormat.values())
-            insertOrder = "INSERT INTO `order` (`order_id`,`order_name`,`order_number`,`email`,`phone`,`note`,`title`,`created_at`,`processed_at`,`token`,`total_price`,`total_weight`,`fulfillment_status`) " \
-                          "VALUES ('%s', '%s', '%s',' %s', '%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s');" % (
-                          orderFormat['order_id'], orderFormat['order_name'], orderFormat['order_number'],
+            insertOrder = "INSERT INTO `order` (`order_id`,`store_id`,`store_name`,`order_name`,`order_number`,`email`,`phone`,`note`,`title`,`created_at`,`processed_at`,`token`,`total_price`,`total_weight`,`fulfillment_status`) " \
+                          "VALUES ('%s', '%s', '%s', '%s', '%s',' %s', '%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s');" % (
+                          orderFormat['order_id'],orderFormat['store_id'],orderFormat['store_name'], orderFormat['order_name'], orderFormat['order_number'],
                           orderFormat['email'], orderFormat['phone'], orderFormat['note'], orderFormat['title'],
                           orderFormat['created_at'], orderFormat['processed_at'], orderFormat['token'],
                           orderFormat['total_price'], orderFormat['total_weight'], orderFormat['fulfillment_status'])
@@ -167,13 +182,13 @@ class shopifyOper:
                 orderFormat['quantity'] = x['quantity']
                 orderFormat['sku'] = x['sku']
                 orderFormat['name'] = x['name']
-                result = self.checkOrder(orderFormat['order_id'], 'order_item')
+                result = self.checkOrder(orderFormat['order_id'], 'order_item', x['sku'])
                 if result:
                     continue
                 insertOrder = "INSERT INTO `order_item` (`order_id`,`title`,`quantity`,`sku`,`name`) " \
                               "VALUES ('%s', '%s', '%s',' %s', '%s');" % (
-                                  orderFormat['order_id'], orderFormat['title'], orderFormat['quantity'],
-                                  orderFormat['sku'], orderFormat['name'])
+                                  orderFormat['order_id'], orderFormat['title'].strip(), orderFormat['quantity'],
+                                  orderFormat['sku'].strip(), orderFormat['name'].strip())
                 try:
                     pass
                     rs = curros.execute(insertOrder)
@@ -226,12 +241,11 @@ class shopifyOper:
                 print(e)
                 db.rollback()
         return True
-    def exportOrder(self, data):
+    def exportOrder(self, data,storeId,storeName):
         import csv
         import codecs
-        import pandas
-        import sys,io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='gb18030')
+        #import sys,io
+        #sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='gb18030')
         """
         导出csv
         :param data:
@@ -245,8 +259,10 @@ class shopifyOper:
             for x in data:
                 uid = uuid.uuid3(namespace, self.NAME)
                 newList.append({
-                    'order_id' : str(x['id']),
-                    'tracking_number': 'YT2018121272089185',
+                    'order_id' : str(x['id']) + "\t",
+                    'tracking_number': '',
+                    'store_id': storeId,
+                    'store_name': storeName,
                     'email': x['email'],
                     'only_id': uid,
                     'currency':x['currency'],
@@ -267,8 +283,9 @@ class shopifyOper:
                     'shipping_address_name':x['shipping_address']['name'],
                     'shipping_address_zip': x['shipping_address']['zip'],
                 })
-            with open("E:\\livePython\\order%s.csv" % time.strftime("%Y-%m-%d-%H-%M"), 'w+', newline='',encoding='utf-8') as f:
-                headers = ['order_id','tracking_number', 'email', 'only_id','currency','order_number','sku','title','quantity','created_at','phone','note','shipping_address1','shipping_address2',
+            print(self.paths)
+            with open(self.paths + "/order-"+storeName+"%s.csv" % time.strftime("%Y-%m-%d-%H"), 'w+', newline='',encoding='utf-8') as f:
+                headers = ['order_id','tracking_number','store_id','store_name' , 'email', 'only_id','currency','order_number','sku','title','quantity','created_at','phone','note','shipping_address1','shipping_address2',
                            'shipping_address_first_name','shipping_address_last_name','shipping_address_city','shipping_address_country','shipping_address_latitude','shipping_address_name','shipping_address_zip']
                 csvrwite = csv.DictWriter(f, headers)
                 csvrwite.writeheader()
@@ -283,8 +300,8 @@ class shopifyOper:
         return strTime
 
     def tsTime(self):
-
-        t = time.strftime("%Y-%m-%d 00:00:00", time.localtime())
+        #t = time.strftime("%Y-%m-%d 00:00:00", time.localtime())
+        t = (datetime.now() + timedelta(days=-1)).strftime('%Y-%m-%d 00:00:00')
         # 将其转换为时间数组
         timeStruct = time.strptime(t, "%Y-%m-%d %H:%M:%S")
         # 转换为时间戳:
@@ -293,7 +310,8 @@ class shopifyOper:
 
     def endTime(self):
         # t = "2020-06-27 23:59:59"
-        t = time.strftime("%Y-%m-%d 23:59:59", time.localtime())
+        #t = time.strftime("%Y-%m-%d 23:59:59", time.localtime())
+        t = (datetime.now() + timedelta(days=-1)).strftime('%Y-%m-%d 23:59:59')
         # 将其转换为时间数组
         timeStruct = time.strptime(t, "%Y-%m-%d %H:%M:%S")
         # 转换为时间戳:
@@ -304,20 +322,65 @@ class shopifyOper:
         return '{0:%Y%m%d%H%M%S%f}'.format(datetime.datetime.now()) + ''.join([str(random.randint(1, 10)) for i in range(5)])
 
 
-
-    def uploadTracking(self,data):
+    def uploadTracking(self,data,db,storeObj):
         """
         上传跟踪号
         :param data:
         :return:
         """
         try:
-            if data['order_id'] and data['tracking_number'] is not None:
+            if not data['order_id'] and data['tracking_number'] :
                 quit(999)
-            shopify.ShopifyResource.set_site(self.shop_url)
+            if not data['store']:
+                quit(999)
+            # cursors = storeObj
+            self.cursor = storeObj
+            self.db = db
+            sql = "SELECT * FROM `store` WHERE id = %s AND status = 1" %(data['store'])
+            self.cursor.execute(sql)
+            results = self.cursor.fetchone()
+            if not results:
+                return
+            storeUrl = "https://%s:%s@%s.myshopify.com/admin/api/%s" % (results['api_key'], results['api_pwd'],results['name'], results['api_version'])
+            shopify.ShopifyResource.set_site(storeUrl)
+            #. 处理订单号
+            # orderId = 2532678729887
             fulfillment = shopify.Fulfillment.find_first(order_id=data['order_id'])
-            fulfillment.tracking_number = [data['tracking_number']]
-            fulfillment.save()
+            if not fulfillment:
+                #. 创建
+                shopify_order = shopify.Order.find(data['order_id'])
+                new_fulfillment = shopify.Fulfillment(
+                    {'order_id': shopify_order.id, 'line_items': shopify_order.line_items})
+                # new_fulfillment.tracking_company = 'USPS'
+                new_fulfillment.tracking_company = data['tracking_company']
+                new_fulfillment.tracking_url = data['tracking_url']
+                new_fulfillment.tracking_numbers = [data['tracking_number']]
+                new_fulfillment.location_id = results['location_id']
+                ful = new_fulfillment.save()
+            else:
+                #. 判断跟踪号是否一样
+                if fulfillment.tracking_number != data['tracking_number']:
+                    fulfillment.tracking_number = data['tracking_number']
+                    fulfillment.tracking_url = data['tracking_url']
+                    fulfillment.tracking_company = data['tracking_company']
+                    ful = fulfillment.save()
+                    print(data['order_id'])
+                    print(ful)
+                else:
+                    return True
+            if ful is True:
+                result = self.checkOrder(data['order_id'],'order_tracking_detail')
+                if not result:
+                    insert = "INSERT INTO `order_tracking_detail` (`order_id`,`tracking_number_1`,`tracking_url`,`tracking_company`) VALUES('%s','%s', '%s', '%s')" % (
+                    data['order_id'], data['tracking_number'],data['tracking_url'],data['tracking_company'])
+                    try:
+                        self.cursor.execute(insert)
+                        self.db.commit()
+                    except Exception as e:
+                        print(e)
+                        db.rollback()
+            else:
+                return False
             return True
         except Exception as e:
             raise e
