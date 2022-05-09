@@ -1,2 +1,2 @@
-# shopify
-project by live
+# shopline
+shopline service
